@@ -173,7 +173,9 @@ Enter — берётся лучший по пингу (первая строка
 
 ## Сборка
 
-Windows (PowerShell):
+Windows: проще всего **двойной клик по `build.bat`** — он сам обходит
+ExecutionPolicy (по умолчанию Windows блокирует .ps1-скрипты) и оставляет
+окно открытым. Из PowerShell то же самое:
 
 ```powershell
 .\build.ps1               # windows amd64 -> build\warp-chain-windows-amd64.exe
