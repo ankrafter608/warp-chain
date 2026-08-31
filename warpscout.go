@@ -19,6 +19,31 @@ import (
 	"time"
 )
 
+// pickEndpoint shows the working candidates and returns the user's choice.
+// Empty answer keeps the scan's own best (first row, warpscout sorts by ping).
+func pickEndpoint(cands []epCandidate, phase int, best string) (string, error) {
+	const maxShow = 15
+	show := cands
+	if len(show) > maxShow {
+		show = show[:maxShow]
+	}
+	fmt.Printf("\nРабочих эндпоинтов: %d. Лучшие %d:\n", len(cands), len(show))
+	fmt.Printf("  %-3s %-23s %-8s %-8s %-6s %s\n", "#", "ЭНДПОИНТ", "PING", "ВИДЕН", "НОДА", "ЛОКАЦИЯ")
+	for i, c := range show {
+		fmt.Printf("  %-3d %-23s %-8s %-8s %-6s %s\n", i+1, c.endpoint, c.ping, c.country, c.node, c.location)
+	}
+	choice := prompt(fmt.Sprintf("Эндпоинт фазы %d (номер, Enter = лучший)", phase), "")
+	if choice == "" {
+		return best, nil
+	}
+	n, err := strconv.Atoi(choice)
+	if err != nil || n < 1 || n > len(show) {
+		fmt.Printf("  не понял %q — беру лучший (%s)\n", choice, best)
+		return best, nil
+	}
+	return show[n-1].endpoint, nil
+}
+
 func warpscoutName() string {
 	if runtime.GOOS == "windows" {
 		return "warpscout.exe"
@@ -299,9 +324,9 @@ func scanBest(o options, a scanArgs) (string, error) {
 		fmt.Printf("  scan -best не удался (%v) — пробую полный скан с отчётом...\n", err)
 	}
 
-	report := filepath.Join(o.outDir, fmt.Sprintf("warpscout-report-phase%d.txt", a.phase))
+	report := o.reportPath(a.phase)
 	full := append(append([]string{}, args...), "-o", report)
-	if _, err := runWarpscout(o.warpscoutPath, full); err != nil {
+	if err := runWarpscoutFull(o.warpscoutPath, full); err != nil {
 		return "", err
 	}
 	return pickFromReport(report, a.countries)
@@ -325,14 +350,132 @@ func runWarpscout(path string, args []string) (string, error) {
 	return line, fmt.Errorf("stdout не содержит ip:port (%q)", line)
 }
 
+// runWarpscoutFull runs a full scan that writes its -o report. Unlike
+// runWarpscout (which expects an ip:port line from -best), a full scan prints
+// summary tables to stdout, so only the exit code matters here.
+func runWarpscoutFull(path string, args []string) error {
+	cmd := exec.Command(path, args...)
+	cmd.Stdout = os.Stdout // summary tables double as progress feedback
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// --- scan + interactive pick -------------------------------------------------
+
+// epCandidate is one working endpoint from a warpscout report.
+type epCandidate struct {
+	endpoint string // ip:port
+	ping     string // raw ping column (e.g. "12ms"), may be "?"
+	country  string // SEEN AS ISO code (FI, DE, ...)
+	node     string // IATA colo code (HEL, ARN, ...)
+	location string // human-readable node location
+}
+
+// reportRowRe parses one data row of a warpscout report (see reportRowFmt
+// in warpscout's report.go):
+//
+//	ENDPOINT PING [TUNPING LOSS [SPEED]] SEEN_AS NODE LOCATION...
+var reportRowRe = regexp.MustCompile(
+	`^(\d{1,3}(?:\.\d{1,3}){3}:\d{1,5})\s+(\S+)` + // endpoint, ping
+		`(?:\s+(\S+)\s+(\S+))?` + // optional tun ping, loss
+		`(?:\s+(\S+))?` + // optional speed
+		`\s+(\S+)\s+([A-Z]{3})\s+(.+)$`) // seen-as region, NODE, location
+
+// parseReport reads a warpscout text report and returns all working endpoints
+// in scan order (warpscout already sorts them best-first).
+func parseReport(path string) ([]epCandidate, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var out []epCandidate
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			// everything after the torn-down header is dead weight: handshake
+			// ok, then cut mid-stream — never offer those as candidates
+			if strings.Contains(line, "torn down") {
+				break
+			}
+			continue
+		}
+		m := reportRowRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		out = append(out, epCandidate{
+			endpoint: m[1],
+			ping:     m[2],
+			country:  strings.ToUpper(strings.TrimPrefix(m[6], "?")),
+			node:     m[7],
+			location: strings.TrimSpace(m[8]),
+		})
+	}
+	return out, nil
+}
+
+// reportPath is where scanAndPick stores the phase's full report.
+func (o options) reportPath(phase int) string {
+	return filepath.Join(o.dataDir, fmt.Sprintf("warpscout-report-phase%d.txt", phase))
+}
+
+// scanAndPick runs a full scan into a report file, then — in the interactive
+// wizard — lets the user choose the endpoint from the working candidates.
+func scanAndPick(o options, a scanArgs) (string, error) {
+	cands, best, err := scanCandidates(o, a)
+	if err != nil {
+		return "", err
+	}
+	// -plain or piped stdin: no questions, take the best
+	if !o.interactive {
+		return best, nil
+	}
+	return pickEndpoint(cands, a.phase, best)
+}
+
+// scanCandidates always runs the full report scan (never -best) so the wizard
+// has the whole candidate list; returns candidates and the report's best row.
+func scanCandidates(o options, a scanArgs) ([]epCandidate, string, error) {
+	args := []string{"scan", "-p", "awg", "-plain", "-a", o.accountPath, "-t", strconv.Itoa(a.timeout)}
+	if a.node != "" {
+		args = append(args, "-node", a.node)
+	}
+	if a.excludeNode != "" {
+		args = append(args, "-exclude-node", a.excludeNode)
+	}
+	if len(a.countries) > 0 {
+		args = append(args, "-country", strings.Join(a.countries, ","))
+	}
+	if a.port > 0 {
+		args = append(args, "-port", strconv.Itoa(a.port))
+	}
+	if a.through != "" {
+		args = append(args, "-through", a.through)
+	}
+
+	report := o.reportPath(a.phase)
+	full := append(append([]string{}, args...), "-o", report)
+	if err := runWarpscoutFull(o.warpscoutPath, full); err != nil {
+		return nil, "", err
+	}
+	cands, err := parseReport(report)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(cands) == 0 {
+		return nil, "", fmt.Errorf("в отчёте %s нет ни одного рабочего эндпоинта", report)
+	}
+	return cands, cands[0].endpoint, nil
+}
+
 var endpointRe = regexp.MustCompile(`^\d{1,3}(?:\.\d{1,3}){3}:\d{1,5}$`)
 
 func isEndpoint(s string) bool { return endpointRe.MatchString(s) }
 
-// pickFromReport reads a warpscout text report and returns the best endpoint
-// whose SEEN AS column matches the country filter (or the first row at all).
+// pickFromReport returns the best endpoint from a report, preferring one whose
+// SEEN AS country matches the filter. Non-interactive fallback of scanBest.
 func pickFromReport(path string, countries []string) (string, error) {
-	data, err := os.ReadFile(path)
+	cands, err := parseReport(path)
 	if err != nil {
 		return "", err
 	}
@@ -340,50 +483,13 @@ func pickFromReport(path string, countries []string) (string, error) {
 	for _, c := range countries {
 		want[c] = true
 	}
-	var first, matched string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, ":") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 3 || !isEndpoint(fields[0]) {
-			continue
-		}
-		// row: ENDPOINT PING [TUNPING [LOSS [SPEED]]] SEEN_AS NODE ...
-		country := ""
-		for _, f := range fields[1:] {
-			if looksLikeCountry(f) {
-				country = strings.ToUpper(f)
-				break
-			}
-		}
-		if first == "" {
-			first = fields[0]
-		}
-		if country != "" && (len(want) == 0 || want[country]) {
-			matched = fields[0]
-			break
+	for _, c := range cands {
+		if len(want) == 0 || want[c.country] {
+			return c.endpoint, nil
 		}
 	}
-	switch {
-	case matched != "":
-		return matched, nil
-	case first != "":
-		return first, nil
-	default:
-		return "", fmt.Errorf("в отчёте %s нет ни одного рабочего эндпоинта", path)
+	if len(cands) > 0 {
+		return cands[0].endpoint, nil
 	}
-}
-
-func looksLikeCountry(f string) bool {
-	if len(f) != 2 {
-		return false
-	}
-	for _, r := range f {
-		if r < 'A' || r > 'Z' {
-			return false
-		}
-	}
-	return true
+	return "", fmt.Errorf("в отчёте %s нет ни одного рабочего эндпоинта", path)
 }

@@ -52,6 +52,8 @@ type options struct {
 	baseEndpoint string
 	exitEndpoint string
 
+	interactive bool // stdin is a terminal and -plain not given
+
 	mtuTun  int
 	mtuBase int
 	mtuExit int
@@ -98,7 +100,7 @@ func run() error {
 	flag.StringVar(&o.outDir, "out", o.outDir, "output directory for generated configs")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.StringVar(&o.countries, "country", "FI,SE,DE", "exit countries (comma-separated ISO codes, empty = any)")
-	flag.StringVar(&o.excludeNode, "exclude-node", "DME", "edge nodes to exclude in phase 1 (empty = keep all)")
+	flag.StringVar(&o.excludeNode, "exclude-node", "DME,LED", "edge nodes to exclude in phase 1 (empty = keep all)")
 	flag.StringVar(&o.node, "node", "", "restrict phase 1 to these edge nodes, e.g. HEL,ARN")
 	flag.IntVar(&o.port, "port", 0, "restrict scanned WARP port (0 = all ports)")
 	flag.StringVar(&o.baseEndpoint, "base-endpoint", "", "reuse this phase-1 endpoint (ip:port), skip scan 1")
@@ -142,8 +144,8 @@ func run() error {
 	fmt.Printf("конфиги:   %s\n", o.outDir)
 
 	// --- wizard (only where flags didn't decide) ---
-	interactive := !o.plain && stdinIsTerminal()
-	if interactive {
+	o.interactive = !o.plain && stdinIsTerminal()
+	if o.interactive {
 		o.countries = prompt("Страны выхода (ISO, через запятую)", o.countries)
 		o.node = prompt("Ноды фазы 1 (HEL,ARN,FRA; пусто = все кроме exclude-node)", o.node)
 		o.excludeNode = prompt("Исключаемые ноды фазы 1", o.excludeNode)
@@ -269,10 +271,17 @@ func ensureEndpoints(o options, st *state, countries []string, scanTimeout int) 
 	var err error
 	if base == "" {
 		fmt.Println("Фаза 1/2: сканирую базовый эндпоинт (AmneziaWG, это может занять несколько минут)...")
-		base, err = scanBest(o, scanArgs{
-			countries: countries, excludeNode: o.excludeNode, node: o.node,
-			port: o.port, timeout: scanTimeout, phase: 1,
-		})
+		if o.interactive {
+			base, err = scanAndPick(o, scanArgs{
+				countries: countries, excludeNode: o.excludeNode, node: o.node,
+				port: o.port, timeout: scanTimeout, phase: 1,
+			})
+		} else {
+			base, err = scanBest(o, scanArgs{
+				countries: countries, excludeNode: o.excludeNode, node: o.node,
+				port: o.port, timeout: scanTimeout, phase: 1,
+			})
+		}
 		if err != nil {
 			return "", "", fmt.Errorf("фаза 1: %w", err)
 		}
@@ -280,10 +289,17 @@ func ensureEndpoints(o options, st *state, countries []string, scanTimeout int) 
 	}
 	if exit == "" {
 		fmt.Println("Фаза 2/2: сканирую exit-эндпоинт через базовый (ещё несколько минут)...")
-		exit, err = scanBest(o, scanArgs{
-			countries: countries, through: base,
-			port: o.port, timeout: scanTimeout, phase: 2,
-		})
+		if o.interactive {
+			exit, err = scanAndPick(o, scanArgs{
+				countries: countries, through: base,
+				port: o.port, timeout: scanTimeout, phase: 2,
+			})
+		} else {
+			exit, err = scanBest(o, scanArgs{
+				countries: countries, through: base,
+				port: o.port, timeout: scanTimeout, phase: 2,
+			})
+		}
 		if err != nil {
 			return "", "", fmt.Errorf("фаза 2: %w", err)
 		}
