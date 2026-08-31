@@ -1,0 +1,31 @@
+# binaries
+warp-chain
+warp-chain.exe
+build/
+dist/
+
+# release archives
+*.zip
+*.tar.gz
+
+# runtime data: warpscout binary, WARP accounts (registration tokens +
+# private keys), endpoint cache, generated configs with real keys — never commit
+data/
+out/
+
+# legacy flat layout (older versions kept these in the project root)
+warpscout
+warpscout.exe
+warpscout-account.json
+warp-chain-state.json
+warp-chain-2*/
+warp-chain.json
+warp-chain-links.txt
+warp-chain-card.md
+warp-chain-test.json
+test-chain.bat
+test-endpoints*.json
+
+# local logs / debug output
+repro.log
+*.log
