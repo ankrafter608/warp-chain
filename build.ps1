@@ -8,8 +8,12 @@ param(
 $ErrorActionPreference = "Stop"
 New-Item -ItemType Directory -Force -Path build | Out-Null
 
-# git tag wins, otherwise "dev"
-$Version = git describe --tags 2>$null
+# git tag wins, fall back to short hash, then "dev". git describe writes to
+# stderr when there are no tags, which PowerShell promotes to a terminating
+# error under Stop — so drop EAP for the duration of the call.
+$ErrorActionPreference = "Continue"
+$Version = git describe --tags --always --dirty 2>$null
+$ErrorActionPreference = "Stop"
 if (-not $Version) { $Version = "dev" }
 Write-Host "version: $Version"
 
