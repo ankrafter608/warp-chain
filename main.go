@@ -194,6 +194,17 @@ func run() error {
 	for _, f := range files {
 		fmt.Printf("  %s\n", f)
 	}
+	if o.interactive {
+		for _, f := range files {
+			if filepath.Base(f) == "warp-chain-profiles.json" {
+				if copyToClipboard(f) {
+					fmt.Println("\nСодержимое warp-chain-profiles.json скопировано в буфер обмена: " +
+						"NekoBox -> Сервер -> Добавить профиль из буфера обмена.")
+				}
+				break
+			}
+		}
+	}
 	fmt.Println("\nПапка результатов:", filepath.Dir(files[0]))
 	fmt.Println(nextSteps(files))
 	waitForEnter("Нажмите Enter, чтобы закрыть окно...")
@@ -350,7 +361,7 @@ warp-chain %s — генератор WARP-in-WARP (AmneziaWG -> WireGuard) дл�
 }
 
 func nextSteps(files []string) string {
-	var card, js, links string
+	var card, js, links, profiles string
 	for _, f := range files {
 		switch {
 		case strings.HasSuffix(f, ".md"):
@@ -359,23 +370,26 @@ func nextSteps(files []string) string {
 			js = f
 		case strings.HasSuffix(f, "-links.txt"):
 			links = f
+		case filepath.Base(f) == "warp-chain-profiles.json":
+			profiles = f
 		}
 	}
 	return fmt.Sprintf(`
 Дальше — два варианта.
 
-Вариант А (быстрый, профили NekoBox):
-  1. NekoBox: Сервер -> Добавить профиль из буфера обмена — по очереди ссылки из
-     %s (сначала AWG-BASE, потом WARP-EXIT).
+Вариант А (профили + цепочка):
+  1. NekoBox: Сервер -> Добавить профиль из буфера обмена, вставив весь текст
+     %s — появятся оба профиля (AWG-BASE и WARP-EXIT). Их же можно добавить
+     по ссылкам из %s (по очереди).
   2. Сервер -> Добавить профиль вручную -> Тип: Цепочка прокси:
      AWG-BASE, затем WARP-EXIT. Нажмите Enter на цепочке.
   3. Включите Режим TUN; MTU TUN = 1200 (Настройки -> Настройки режима TUN);
      DNS — как в карточке.
 
-Вариант B (одним файлом):
-  NekoBox: Сервер -> Добавить профиль вручную -> Тип: Custom Config,
-  ядро sing-box, режим "Полный конфиг" — вставьте содержимое %s.
-  (TUN/DNS при этом берутся из настроек самого NekoBox.)
+Вариант B (Custom Config, одним файлом) в текущих сборках NekoBox НЕ работает:
+приложение при запуске дописывает в эндпоинты "server": null, и его ядро
+отклоняет конфиг ("unknown field server") — это баг NekoBox, не конфига.
+Файл %s остаётся для прямого запуска ядром (sing-box run -c).
 
-Все значения полей и чек-лист проверки: %s`, links, js, card)
+Все значения полей и чек-лист проверки: %s`, profiles, links, js, card)
 }

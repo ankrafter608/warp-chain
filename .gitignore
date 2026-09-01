@@ -1,6 +1,7 @@
 # binaries
 warp-chain
 warp-chain.exe
+warpchain.exe
 build/
 dist/
 
@@ -20,6 +21,7 @@ warpscout-account.json
 warp-chain-state.json
 warp-chain-2*/
 warp-chain.json
+warp-chain-profiles.json
 warp-chain-links.txt
 warp-chain-card.md
 warp-chain-test.json

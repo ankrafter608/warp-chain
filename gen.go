@@ -300,6 +300,21 @@ func buildTestConfig(o options, acc account, base, exit, reservedMain string) ma
 	}
 }
 
+// buildProfilesConfig returns both tunnels as a bare {"endpoints": [...]} —
+// the shape NekoBox's importer turns into two regular profiles via
+// "Add profile from clipboard". A full config (warp-chain.json) can NOT be
+// imported as a Custom Config profile instead: current NekoBox builds
+// (verified on 5.11.28.3) inject "server": null into every endpoint at
+// startup and their core rejects it ("unknown field \"server\"").
+func buildProfilesConfig(o options, acc account, base, exit, reservedMain string) map[string]any {
+	return map[string]any{
+		"endpoints": []any{
+			buildAwgBase(o, acc.Outer, base),
+			buildWgExit(o, &acc, exit, reservedMain),
+		},
+	}
+}
+
 func splitEndpoint(ep string, defPort int) (string, int) {
 	i := strings.LastIndex(ep, ":")
 	if i < 0 {
@@ -399,6 +414,16 @@ func generateAll(o options, st *state, acc account, countries []string, base, ex
 	}
 	written = append(written, jsonPath)
 
+	profilesJSON, err := marshalNoEscape(buildProfilesConfig(o, acc, base, exit, reservedMain))
+	if err != nil {
+		return nil, err
+	}
+	profilesPath := filepath.Join(o.outDir, "warp-chain-profiles.json")
+	if err := os.WriteFile(profilesPath, append(profilesJSON, '\n'), 0644); err != nil {
+		return nil, err
+	}
+	written = append(written, profilesPath)
+
 	baseLink, exitLink := buildLinks(o, acc, base, exit, reservedMain, reservedOuter)
 	linksPath := filepath.Join(o.outDir, "warp-chain-links.txt")
 	links := fmt.Sprintf("# Импорт в NekoBox: Сервер -> Добавить профиль из буфера обмена.\n# По очереди: сначала строка AWG-BASE, затем WARP-EXIT.\n\n%s\n\n%s\n",
@@ -476,10 +501,17 @@ func buildCard(stamp time.Time, o options, acc account, countries []string, base
 
 ## Вариант A — два профиля + цепочка (как в ручной инструкции)
 
-### Быстрый импорт
+### Быстрый импорт (одной вставкой)
 
-Скопируйте по очереди строки ниже и в NekoBox: **Сервер -> Добавить профиль из
-буфера обмена** (NekoBox сам распознает тип AmneziaWG/WireGuard).
+Скопируйте весь текст файла warp-chain-profiles.json из этой папки и в NekoBox:
+**Сервер -> Добавить профиль из буфера обмена**. Появятся сразу оба профиля —
+AWG-BASE и WARP-EXIT (после генерации warp-chain сам кладёт этот файл в буфер
+обмена: clip.exe на Windows, termux-clipboard-set в Termux).
+Затем создайте цепочку (раздел «Цепочка» ниже).
+
+Запасной способ — те же два профиля по ссылкам: скопируйте по очереди строки
+ниже и в NekoBox: **Сервер -> Добавить профиль из буфера обмена** (NekoBox сам
+распознает тип AmneziaWG/WireGuard).
 
 1. Ссылка AWG-BASE:
 
@@ -503,11 +535,24 @@ func buildCard(stamp time.Time, o options, acc account, countries []string, base
 
 Активируйте цепочку (Enter по профилю WARP-in-WARP).
 
-## Вариант B — один полный конфиг
+## Вариант B — один полный конфиг (Custom Config)
+
+> **ВНИМАНИЕ: в текущих сборках NekoBox этот способ не работает.** Приложение
+> при запуске дописывает в каждый эндпоинт поле "server": null (чтение
+> отсутствующего ключа в Qt-коде NekoBox вставляет null), а ядро отклоняет
+> эндпоинт: endpoints[0].server: json: unknown field "server". Это баг NekoBox,
+> а не конфига — сам warp-chain.json валиден (проверено "nekobox_core
+> sing-box check"). Пока баг не исправлен, используйте вариант A. Файл
+> warp-chain.json остаётся для прямого запуска ядром:
+> "nekobox_core.exe sing-box run -c warp-chain.json".
 
 **Сервер -> Добавить профиль вручную -> Тип: Custom Config**, ядро sing-box,
 режим «Полный конфиг» (internal-full) — вставьте содержимое warp-chain.json.
 TUN и DNS при этом управляются настройками самого NekoBox (см. ниже).
+
+Профиль после импорта будет **один** и в русской локализации NekoBox называется
+**«Обычай»** — это кривой машинный перевод слова Custom. Так и должно быть: весь
+конфиг (обе цепочки + TUN + DNS) живёт внутри этого единственного профиля.
 
 ## Значения полей (для проверки/ручного ввода)
 
